@@ -1,0 +1,5 @@
+{
+  "ClientsCount": 20,
+  "ClientExe": ".\\ex2-client.exe",
+  "MaxElements": 10
+}
