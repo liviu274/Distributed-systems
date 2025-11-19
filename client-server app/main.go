@@ -5,21 +5,32 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 	"time"
 )
 
-type result struct {
+type resultBool struct {
 	idx int
 	val bool
+}
+
+type resultInt struct {
+	idx int
+	val int
+}
+
+type resultString struct {
+	idx int
+	val string
 }
 
 func helloHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Hello, this is a simple handler!")
 }
 
-func ex1ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan result) {
+func ex2ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan resultBool) {
 	defer wg.Done()
 	// extract digits in order
 	var digits []byte
@@ -32,7 +43,7 @@ func ex1ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan result) {
 
 	// no digits -> not a perfect square root
 	if len(digits) == 0 {
-		ch <- result{idx: idx, val: false}
+		ch <- resultBool{idx: idx, val: false}
 		return
 	}
 
@@ -42,7 +53,7 @@ func ex1ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan result) {
 		d := uint64(c - '0')
 		newn := n*10 + d
 		if newn < n { // overflow detected
-			ch <- result{idx: idx, val: false}
+			ch <- resultBool{idx: idx, val: false}
 			return
 		}
 		n = newn
@@ -75,9 +86,9 @@ func ex1ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan result) {
 
 	// check perfect square
 	if root*root == n {
-		ch <- result{idx: idx, val: true}
+		ch <- resultBool{idx: idx, val: true}
 	} else {
-		ch <- result{idx: idx, val: false}
+		ch <- resultBool{idx: idx, val: false}
 	}
 }
 
@@ -117,12 +128,12 @@ func ex2ArrayHandler(w http.ResponseWriter, r *http.Request) {
 	messages = append(messages, fmt.Sprintf("Server received request from client %s (type=%s) with %d items", clientName, reqType, len(arr)))
 
 	// Process each item concurrently using goroutines.
-	ch := make(chan result, len(arr))
+	ch := make(chan resultBool, len(arr))
 	var wg sync.WaitGroup
 	wg.Add(len(arr))
 
 	for i, s := range arr {
-		go ex1ProcessString(s, i, &wg, ch)
+		go ex2ProcessString(s, i, &wg, ch)
 	}
 
 	// Wait for all workers to finish then close the channel and collect results.
@@ -153,9 +164,181 @@ func ex2ArrayHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func ex5ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan resultInt) {
+	defer wg.Done()
+	for _, c := range s {
+		if c != '0' && c != '1' {
+			ch <- resultInt{idx: idx, val: -1}
+			return
+		}
+	}
+	var n int
+	for i, c := range s {
+		d := int(c - '0')
+		newn := n + d*int(math.Pow(2, float64(len(s)-i-1)))
+		if newn < n { // overflow detected
+			ch <- resultInt{idx: idx, val: -1}
+			return
+		}
+		n = newn
+	}
+	ch <- resultInt{idx: idx, val: n}
+}
+
+func ex5ArrayHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var arr []string
+	if err := json.Unmarshal(body, &arr); err != nil {
+		http.Error(w, "invalid json: expected array of strings", http.StatusBadRequest)
+		return
+	}
+
+	// Read client metadata from headers (optional)
+	clientName := r.Header.Get("X-Client-Name")
+	if clientName == "" {
+		clientName = "unknown"
+	}
+	reqType := r.Header.Get("X-Request-Type")
+	if reqType == "" {
+		reqType = r.Method
+	}
+
+	// Messages exchanged (will be included in the response)
+	messages := []string{}
+	messages = append(messages, fmt.Sprintf("Server received request from client %s (type=%s) with %d items", clientName, reqType, len(arr)))
+
+	// Process each item concurrently using goroutines.
+	ch := make(chan resultInt, len(arr))
+	var wg sync.WaitGroup
+	wg.Add(len(arr))
+
+	for i, s := range arr {
+		go ex5ProcessString(s, i, &wg, ch)
+	}
+
+	// Wait for all workers to finish then close the channel and collect results.
+	wg.Wait()
+	close(ch)
+
+	processed := make([]int, len(arr))
+	for res := range ch {
+		processed[res.idx] = res.val
+	}
+
+	var result []int
+	for _, v := range processed {
+		if v != -1 {
+			result = append(result, v)
+		}
+	}
+
+	messages = append(messages, fmt.Sprintf("Server sends response to client %s", clientName))
+
+	// Write back the response (including messages)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]interface{}{"original": arr, "processed": processed, "count": len(arr), "RESULT": result, "messages": messages}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func ex7ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan resultString) {
+	defer wg.Done()
+	cnt := -1
+	var res string
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			cnt = cnt*10 + int(r-'0')
+			continue
+		}
+		for j := 0; j < cnt; j++ {
+			res += string(r)
+		}
+		cnt = 0
+	}
+	ch <- resultString{idx: idx, val: res}
+}
+
+func ex7ArrayHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var arr []string
+	if err := json.Unmarshal(body, &arr); err != nil {
+		http.Error(w, "invalid json: expected array of strings", http.StatusBadRequest)
+		return
+	}
+
+	// Read client metadata from headers (optional)
+	clientName := r.Header.Get("X-Client-Name")
+	if clientName == "" {
+		clientName = "unknown"
+	}
+	reqType := r.Header.Get("X-Request-Type")
+	if reqType == "" {
+		reqType = r.Method
+	}
+
+	// Messages exchanged (will be included in the response)
+	messages := []string{}
+	messages = append(messages, fmt.Sprintf("Server received request from client %s (type=%s) with %d items", clientName, reqType, len(arr)))
+
+	// Process each item concurrently using goroutines.
+	ch := make(chan resultString, len(arr))
+	var wg sync.WaitGroup
+	wg.Add(len(arr))
+
+	for i, s := range arr {
+		go ex7ProcessString(s, i, &wg, ch)
+	}
+
+	// Wait for all workers to finish then close the channel and collect results.
+	wg.Wait()
+	close(ch)
+
+	processed := make([]string, len(arr))
+	for res := range ch {
+		processed[res.idx] = res.val
+	}
+
+	messages = append(messages, fmt.Sprintf("Server sends response to client %s", clientName))
+
+	// Write back the response (including messages)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]interface{}{"original": arr, "processed": processed, "count": len(arr), "RESULT": "No result value given by the exercise", "messages": messages}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
 func main() {
 	http.HandleFunc("/", helloHandler)
 	http.HandleFunc("/ex2", ex2ArrayHandler)
+	http.HandleFunc("/ex5", ex5ArrayHandler)
+	http.HandleFunc("/ex7", ex7ArrayHandler)
+
 	srv := &http.Server{
 		Addr:         ":8080",
 		Handler:      nil, // default mux

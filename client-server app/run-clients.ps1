@@ -23,36 +23,47 @@ $clientsCount = [int]$cfg.ClientsCount
 $clientExe = $cfg.ClientExe
 $maxElements = [int]$cfg.MaxElements
 
-# Build the client exe once for faster startup
-Push-Location -Path $scriptDir
-try {
-  Write-Output "Building client executable: $clientExe"
-  & go build -o $clientExe ex2-client.go
-  if ($LASTEXITCODE -ne 0) {
-    Write-Error "go build failed (exit code $LASTEXITCODE)"
-    exit 1
+## Build and run multiple client sources (ex2-client.go, ex5-client.go)
+$clientSources = @("ex2-client.go", "ex5-client.go", "ex7-client.go")
+
+foreach ($src in $clientSources) {
+  $srcPath = Join-Path $scriptDir $src
+  if (-not (Test-Path $srcPath)) {
+    Write-Warning "Client source not found, skipping: $src"
+    continue
   }
-} finally {
-  Pop-Location
+
+  $exeName = [IO.Path]::ChangeExtension($src, '.exe')
+
+  Push-Location -Path $scriptDir
+  try {
+    Write-Output "Building $src -> $exeName"
+    & go build -o $exeName $src
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "go build failed for $src (exit code $LASTEXITCODE)"
+      exit 1
+    }
+  } finally {
+    Pop-Location
+  }
+
+  $exeFullPath = Join-Path $scriptDir $exeName
+  Write-Output "Starting $clientsCount jobs for $exeName"
+
+  1..$clientsCount | ForEach-Object {
+    $i = $_
+    $name = "${exeName.Replace('.exe','')}-${i}"
+    Start-Job -Name ("client-" + $exeName + "-" + $i) -ScriptBlock {
+      param($exePath, $name, $max)
+      $exeDir = Split-Path -Parent $exePath
+      if ($exeDir -ne '') { Set-Location -Path $exeDir }
+      & $exePath -name $name -max $max
+    } -ArgumentList $exeFullPath, $name, $maxElements
+  }
+
 }
 
-# Compute absolute path for the exe
-$exeFullPath = Join-Path $scriptDir $clientExe
-
-Write-Output "Starting $clientsCount client jobs"
-
-1..$clientsCount | ForEach-Object {
-  $i = $_
-  $name = "Client-$i"
-  Start-Job -Name ("client" + $i) -ScriptBlock {
-    param($exePath, $name, $max)
-    # Ensure working directory is where the exe is located
-    $exeDir = Split-Path -Parent $exePath
-    if ($exeDir -ne '') { Set-Location -Path $exeDir }
-    # Invoke the client exe with flags
-    & $exePath -name $name -max $max
-  } -ArgumentList $exeFullPath, $name, $maxElements
-}
+Write-Output "All jobs started. Waiting for completion..."
 
 # Wait for all jobs, collect and print outputs, then remove jobs
 Get-Job | Wait-Job
