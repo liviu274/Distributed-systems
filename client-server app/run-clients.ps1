@@ -24,7 +24,7 @@ $clientExe = $cfg.ClientExe
 $maxElements = [int]$cfg.MaxElements
 
 ## Build and run multiple client sources (ex2-client.go, ex5-client.go)
-$clientSources = @("ex2-client.go", "ex5-client.go", "ex7-client.go")
+$clientSources = @("ex2-client.go", "ex5-client.go", "ex7-client.go", "ex9-client.go", "ex14-client.go")
 
 foreach ($src in $clientSources) {
   $srcPath = Join-Path $scriptDir $src

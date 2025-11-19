@@ -333,11 +333,197 @@ func ex7ArrayHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func ex9ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan resultBool) {
+	defer wg.Done()
+	var res bool = true
+	cnt := 0
+	for i, c := range s {
+		switch c {
+		case 'a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U':
+			if i%2 == 0 {
+				cnt++
+			} else {
+				res = false
+			}
+		}
+	}
+	if cnt%2 != 0 {
+		res = false
+	}
+	ch <- resultBool{idx: idx, val: res}
+}
+
+func ex9ArrayHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var arr []string
+	if err := json.Unmarshal(body, &arr); err != nil {
+		http.Error(w, "invalid json: expected array of strings", http.StatusBadRequest)
+		return
+	}
+
+	// Read client metadata from headers (optional)
+	clientName := r.Header.Get("X-Client-Name")
+	if clientName == "" {
+		clientName = "unknown"
+	}
+	reqType := r.Header.Get("X-Request-Type")
+	if reqType == "" {
+		reqType = r.Method
+	}
+
+	// Messages exchanged (will be included in the response)
+	messages := []string{}
+	messages = append(messages, fmt.Sprintf("Server received request from client %s (type=%s) with %d items", clientName, reqType, len(arr)))
+
+	// Process each item concurrently using goroutines.
+	ch := make(chan resultBool, len(arr))
+	var wg sync.WaitGroup
+	wg.Add(len(arr))
+
+	for i, s := range arr {
+		go ex9ProcessString(s, i, &wg, ch)
+	}
+
+	// Wait for all workers to finish then close the channel and collect results.
+	wg.Wait()
+	close(ch)
+
+	processed := make([]bool, len(arr))
+	for res := range ch {
+		processed[res.idx] = res.val
+	}
+
+	// For result, count the number of true values
+	trueCount := 0
+	for _, v := range processed {
+		if v == true {
+			trueCount++
+		}
+	}
+
+	messages = append(messages, fmt.Sprintf("Server sends response to client %s", clientName))
+
+	// Write back the response (including messages)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]interface{}{"original": arr, "processed": processed, "count": len(arr), "RESULT": trueCount, "messages": messages}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func ex14ProcessString(s string, idx int, wg *sync.WaitGroup, ch chan resultBool) {
+	defer wg.Done()
+	hasUpper, hasLower, hasDigit, hasSymbol := false, false, false, false
+
+	for _, ch := range s {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			hasLower = true
+		case ch >= 'A' && ch <= 'Z':
+			hasUpper = true
+		case ch >= '0' && ch <= '9':
+			hasDigit = true
+		default:
+			hasSymbol = true
+		}
+	}
+
+	if hasUpper && hasLower && hasDigit && hasSymbol {
+		ch <- resultBool{idx: idx, val: true} // accepted
+	} else {
+		ch <- resultBool{idx: idx, val: false} // not accepted
+	}
+}
+
+func ex14ArrayHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var arr []string
+	if err := json.Unmarshal(body, &arr); err != nil {
+		http.Error(w, "invalid json: expected array of strings", http.StatusBadRequest)
+		return
+	}
+
+	// Read client metadata from headers (optional)
+	clientName := r.Header.Get("X-Client-Name")
+	if clientName == "" {
+		clientName = "unknown"
+	}
+	reqType := r.Header.Get("X-Request-Type")
+	if reqType == "" {
+		reqType = r.Method
+	}
+
+	// Messages exchanged (will be included in the response)
+	messages := []string{}
+	messages = append(messages, fmt.Sprintf("Server received request from client %s (type=%s) with %d items", clientName, reqType, len(arr)))
+
+	// Process each item concurrently using goroutines.
+	ch := make(chan resultBool, len(arr))
+	var wg sync.WaitGroup
+	wg.Add(len(arr))
+
+	for i, s := range arr {
+		go ex14ProcessString(s, i, &wg, ch)
+	}
+
+	// Wait for all workers to finish then close the channel and collect results.
+	wg.Wait()
+	close(ch)
+
+	processed := make([]bool, len(arr))
+	for res := range ch {
+		processed[res.idx] = res.val
+	}
+
+	// For result, count the number of true values
+	var res []string
+	for i, v := range processed {
+		if v == true {
+			res = append(res, arr[i])
+		}
+	}
+
+	messages = append(messages, fmt.Sprintf("Server sends response to client %s", clientName))
+
+	// Write back the response (including messages)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]interface{}{"original": arr, "processed": processed, "count": len(arr), "RESULT": res, "messages": messages}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
 func main() {
 	http.HandleFunc("/", helloHandler)
 	http.HandleFunc("/ex2", ex2ArrayHandler)
 	http.HandleFunc("/ex5", ex5ArrayHandler)
 	http.HandleFunc("/ex7", ex7ArrayHandler)
+	http.HandleFunc("/ex9", ex9ArrayHandler)
+	http.HandleFunc("/ex14", ex14ArrayHandler)
 
 	srv := &http.Server{
 		Addr:         ":8080",
